@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cursor trampoline</title>
+<meta name="description" content="Drop your cursor onto a tiny trampoline and land it in a pile of autumn leaves.">
+<meta property="og:title" content="Cursor trampoline">
+<meta property="og:description" content="Drop your cursor onto a tiny trampoline and land it in a pile of autumn leaves.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fbfaf4; color: #02387A; font-family: 'Inter', system-ui, sans-serif; -webkit-user-select: none; user-select: none; touch-action: none; }
+  /* the ground, the pile and the trampoline fill the whole window */
+  .foot { position: fixed; inset: 0; }
+  .foot canvas, .leaf, .grain { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grain { opacity: 0.26; mix-blend-mode: hard-light; image-rendering: pixelated; }
+  .words { position: fixed; left: max(24px, 5vw); top: max(24px, 6vh); margin: 0; max-width: 340px; }
+  .words h1 { margin: 0 0 10px; font: italic 400 34px/1.1 'Instrument Serif', Georgia, serif; }
+  .words p { margin: 0; font: 400 14px/1.6 'Inter', system-ui, sans-serif; opacity: 0.8; }
+  .by { position: fixed; right: max(20px, 4vw); top: max(24px, 6vh); margin: 0; font: 600 12px/1 'Inter', system-ui, sans-serif; opacity: 0.75; }
+  .by a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="foot" id="foot"><canvas id="pile" aria-hidden="true"></canvas></div>
+<div class="words">
+  <h1>Cursor trampoline</h1>
+  <p>Click anywhere above the trampoline to drop your cursor. Straight down or from an angle, higher or lower: the dashed line shows where it will go. Aim for the leaves.</p>
+</div>
+<p class="by">by <a href="https://mudranagda.com">Mudra Nagda</a></p>
+<canvas class="leaf" id="leaf"></canvas>
+<canvas class="grain" id="grain" aria-hidden="true"></canvas>
+<script type="module">
+// The footer toy from mudranagda.com on its own: leaves drift down and gather on a
+// raked-up pile, and the visitor's cursor can be dropped onto a small trampoline
+// that shoots it into the leaves. Plain canvas, no libraries.
+const P = { leafCount: 5, leafFall: 1, leafSway: 1.7, leafSize: 1 };
+const landed = true, FOOT_MODE = 'trampoline';
+const smoother = (x) => { const k = Math.min(1, Math.max(0, x)); return k * k * k * (k * (k * 6 - 15) + 10); };
+const ramp01 = (x) => Math.min(1, Math.max(0, x));
+const leafCanvas = document.getElementById('leaf');
+const lctx = leafCanvas.getContext('2d');
+function sizeLeaves() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  leafCanvas.width = Math.ceil(innerWidth * dpr);
+  leafCanvas.height = Math.ceil(innerHeight * dpr);
+  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', sizeLeaves);
+sizeLeaves();
+
+// ---- leaves ---------------------------------------------------------------------------
+function leafSprite(stops) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  c.translate(64, 64);
+  const body = () => {
+    c.beginPath();
+    c.moveTo(0, -56);                                  // pointed tip
+    c.bezierCurveTo(30, -34, 38, 6, 16, 40);
+    c.quadraticCurveTo(8, 50, 0, 50);                  // rounded base
+    c.quadraticCurveTo(-8, 50, -16, 40);
+    c.bezierCurveTo(-38, 6, -30, -34, 0, -56);
+    c.closePath();
+  };
+  const g = c.createLinearGradient(-30, -50, 30, 50);
+  stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col));
+  body(); c.fillStyle = g; c.fill();
+  c.save(); body(); c.clip();
+  c.strokeStyle = 'rgba(110, 50, 0, 0.4)'; c.lineWidth = 1.4; c.lineCap = 'round';
+  for (let i = 0; i < 7; i++) {                        // side veins off the midrib
+    const y = -40 + i * 12;
+    for (const sx of [-1, 1]) { c.beginPath(); c.moveTo(0, y + 6); c.quadraticCurveTo(sx * 14, y, sx * 34, y - 10); c.stroke(); }
+  }
+  c.restore();
+  c.strokeStyle = 'rgba(100, 45, 0, 0.65)'; c.lineWidth = 2.2;
+  c.beginPath(); c.moveTo(0, -54); c.lineTo(0, 62); c.stroke(); // midrib and stalk
+  body(); c.strokeStyle = 'rgba(130, 60, 0, 0.5)'; c.lineWidth = 1.6; c.stroke();
+  // a very soft U across the blade: a shallow shaded trough along the spine,
+  // easing up to lighter, lifted edges
+  c.save(); body(); c.clip();
+  const u = c.createLinearGradient(-38, 0, 38, 0);
+  u.addColorStop(0, 'rgba(255, 245, 210, 0.2)');
+  u.addColorStop(0.3, 'rgba(255, 245, 210, 0)');
+  u.addColorStop(0.5, 'rgba(70, 30, 0, 0.2)');
+  u.addColorStop(0.7, 'rgba(255, 245, 210, 0)');
+  u.addColorStop(1, 'rgba(255, 245, 210, 0.2)');
+  c.fillStyle = u; c.fillRect(-64, -64, 128, 128);
+  c.restore();
+  // shaded twin, blended over whichever half is turned away from the light
+  const dk = document.createElement('canvas');
+  dk.width = dk.height = 128;
+  const d = dk.getContext('2d');
+  d.drawImage(cv, 0, 0);
+  d.globalCompositeOperation = 'source-atop';
+  d.fillStyle = 'rgba(60, 25, 0, 0.55)';
+  d.fillRect(0, 0, 128, 128);
+  return { base: cv, dark: dk };
+}
+const SWATCHES = [[143, 159, 30], [233, 180, 23], [222, 154, 28], [179, 66, 26]]; // green, yellow, orange, red
+function randomLeafColour() {
+  const at = Math.random() * (SWATCHES.length - 1);
+  const i = Math.floor(at), k = at - i;
+  const shade = 0.82 + Math.random() * 0.3;
+  const ch = (n) => Math.max(0, Math.min(255, Math.round((SWATCHES[i][n] + (SWATCHES[i + 1][n] - SWATCHES[i][n]) * k) * shade)));
+  return `rgb(${ch(0)}, ${ch(1)}, ${ch(2)})`;
+}
+const randomLeafSprite = () => leafSprite(Array.from({ length: 2 + Math.floor(Math.random() * 2) }, randomLeafColour));
+const looseLeaves = [];
+let lastT = 0, nextLeafAt = 0;
+function spawnLeaf(t, hero, fromTop) {
+  const W = innerWidth, H = innerHeight;
+  let from, aim;
+  if (fromTop) {
+    // later leaves simply come down from above the frame, already sinking
+    from = { x: W * (0.04 + Math.random() * 0.92), y: -60 };
+    aim = { x: from.x, y: from.y + 1 };
+  } else if (hero) {
+    from = { x: W / 2, y: H + 40 };
+    aim = { x: W + 40, y: H / 2 };
+  } else {
+    // start somewhere along the bottom or the two sides, aimed at a random spot inside
+    const edge = Math.random();
+    if (edge < 0.45) from = { x: Math.random() * W, y: H + 40 };
+    else if (edge < 0.725) from = { x: -40, y: H * (0.25 + Math.random() * 0.7) };
+    else from = { x: W + 40, y: H * (0.25 + Math.random() * 0.7) };
+    aim = { x: W * (0.12 + Math.random() * 0.76), y: H * (0.08 + Math.random() * 0.5) };
+  }
+  const T = hero ? 3.4 + Math.random() * 1.6 : 2.8 + Math.random() * 4.2; // seconds a full crossing would take
+  const total = Math.hypot(aim.x - from.x, aim.y - from.y);
+  looseLeaves.push({
+    x: from.x, y: from.y, from, total,
+    push: fromTop ? { x: 0, y: 0 } : { x: (aim.x - from.x) / T, y: (aim.y - from.y) / T },
+    vx: fromTop ? 0 : (aim.x - from.x) / T, vy: fromTop ? 12 : (aim.y - from.y) / T,
+    giveOut: hero ? 0.4 : 0.2 + Math.random() * 0.55,      // fraction of the way before the push dies
+    fallAt: fromTop ? t : null,
+    depth: Math.random(),                                  // where on the pile's face (or how far back on the ground) it comes to rest
+    // everything below is rolled per leaf, the first one included
+    curl: (Math.random() - 0.5) * 70,                      // the push bends into an arc, px/s sideways
+    swayHz: 1.2 + Math.random() * 1.8,
+    swayAmp: 50 + Math.random() * 140,
+    sway2: 0.15 + Math.random() * 0.5, sway2Hz: 0.35 + Math.random() * 0.5, // a second, slower wander
+    sink: 16 + Math.random() * 30,                         // slow terminal fall, px per second
+    settle: 0.03 + Math.random() * 0.05,                   // how quickly it gives in to the fall
+    size: 22 + Math.random() * 66,
+    sprite: randomLeafSprite(),
+    spin: Math.random() * 6.3,
+    tilt: Math.random() * Math.PI * 2,                                   // every leaf faces its own way
+    drift: (Math.random() < 0.5 ? -1 : 1) * (0.08 + Math.random() * 0.22), // a slow turn, never a spin
+    rock: 0.12 + Math.random() * 0.14, rockHz: 1.6 + Math.random() * 1.2, // how it rocks as it sways
+    turn: 0.18 + Math.random() * 0.2, turnHz: 0.5 + Math.random() * 0.6,  // a slight, slow roll about the spine
+    fold: 0.2 + Math.random() * 0.16,                                     // how cupped the blade is: a soft U
+    born: t,
+  });
+}
+
+// ---- the pile -------------------------------------------------------------------------
+const foot = document.getElementById('foot');
+const pileCanvas = document.getElementById('pile');
+const GROUND_PAD = 64; // the ground line, px above the bottom of the window
+const pileSprites = Array.from({ length: 26 }, randomLeafSprite);
+function layLeaf(c, sprite, x, y, size, roll, squash, shade, alpha) {
+  c.save();
+  c.translate(x, y);
+  c.scale(1, squash);
+  c.rotate(roll);
+  c.globalAlpha = 0.3 * alpha;                             // a little shadow under it
+  c.drawImage(sprite.dark, -size / 2 + 1, -size / 2 + 3 / squash, size, size);
+  c.globalAlpha = alpha;
+  c.drawImage(sprite.base, -size / 2, -size / 2, size, size);
+  if (shade > 0.01) { c.globalAlpha = shade * alpha; c.drawImage(sprite.dark, -size / 2, -size / 2, size, size); }
+  c.restore();
+}
+function pileShape(W) { const s = Math.max(70, Math.min(95, W * 0.07)); return { cx: W * 0.62, s, H: s * 0.72 }; }
+function pileH(x, W) {
+  const p = pileShape(W), u = (x - p.cx) / p.s;
+  if (Math.abs(u) >= 1.6) return 0;
+  const hill = Math.pow(Math.cos((u / 1.6) * Math.PI / 2), 1.5); // a rounded mound, not a cone
+  return p.H * hill * (1 + 0.06 * Math.sin(u * 7) + 0.04 * Math.sin(u * 13 + 1)); // a little lumpy
+}
+function paintPile() {
+  const W = foot.clientWidth, Hh = foot.clientHeight;
+  if (!W || !Hh) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  pileCanvas.width = Math.ceil(W * dpr);
+  pileCanvas.height = Math.ceil(Hh * dpr);
+  const c = pileCanvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, Hh);
+  const ground = Hh - GROUND_PAD, p = pileShape(W);
+  // its own small seeded generator, so the pile is the same pile after a resize
+  let seed = 90210;
+  const r = () => { seed = (seed + 0x6D2B79F5) | 0; let k = Math.imul(seed ^ (seed >>> 15), 1 | seed); k = (k + Math.imul(k ^ (k >>> 7), 61 | k)) ^ k; return ((k ^ (k >>> 14)) >>> 0) / 4294967296; };
+  const scale = W < 600 ? 0.8 : 1;
+  // soft shadow on the ground under the mound
+  c.save();
+  c.translate(p.cx, ground + 2); c.scale(1, 0.1);
+  const sh = c.createRadialGradient(0, 0, p.s * 0.4, 0, 0, p.s * 2);
+  sh.addColorStop(0, 'rgba(70, 35, 0, 0.26)'); sh.addColorStop(1, 'rgba(70, 35, 0, 0)');
+  c.fillStyle = sh; c.beginPath(); c.arc(0, 0, p.s * 2, 0, Math.PI * 2); c.fill();
+  c.restore();
+  // a small leaf-coloured heart well inside the mound, only so no paper can show
+  // through; the leaves below bury it completely
+  c.beginPath(); c.moveTo(p.cx - p.s * 1.05, ground);
+  for (let x = p.cx - p.s * 1.05; x <= p.cx + p.s * 1.05; x += 4) c.lineTo(x, ground - Math.max(0, pileH(x, W) * 0.78 - 16));
+  c.lineTo(p.cx + p.s * 1.05, ground); c.closePath();
+  c.fillStyle = 'rgb(168, 112, 28)'; c.fill();
+  // loose ones on the ground: thick near the pile, thinning out to the edges
+  for (let i = 0; i < 70; i++) {
+    const near = i < 52;
+    const x = near ? p.cx + (r() + r() + r() - 1.5) * p.s * 3.2 : r() * W;
+    layLeaf(c, pileSprites[Math.floor(r() * pileSprites.length)], x, ground - r() * 12, (24 + r() * 30) * scale, r() * 6.3, 0.22 + r() * 0.3, 0.1 + r() * 0.2, 1);
+  }
+  // the mound itself, back to front: the first ones down sit deepest in shade
+  const N = Math.round((p.s * p.H) / 22);
+  for (let i = 0; i < N; i++) {
+    const x = p.cx + (r() < 0.5 ? r() * 2 - 1 : (r() + r() - 1)) * p.s * 1.58; // even cover, a little thicker in the middle
+    const h = pileH(x, W);
+    const k = i / N;
+    // early layers fill the body, the last ones favour the surface so the outline reads leafy
+    const v = k < 0.7 ? r() : 0.75 + r() * 0.3;
+    layLeaf(c, pileSprites[Math.floor(r() * pileSprites.length)], x, ground - v * h - 4, (16 + r() * 20) * scale, r() * 6.3, 0.4 + r() * 0.55, 0.5 * Math.pow(1 - k, 1.4) + (1 - v) * 0.12, 1);
+  }
+}
+addEventListener('resize', paintPile);
+paintPile();
+const burstLeaves = [];
+const settled = [];        // leaves that have landed
+const SETTLED_MAX = 90;    // beyond this the oldest fade away, so it never silts up
+let pileHitAt = -10;       // when the pile was last landed on
+function tossLeaves(W, n, power, atX, spread) {
+  for (let i = 0; i < n; i++) {
+    const fx = atX + (Math.random() * 2 - 1) * spread;
+    burstLeaves.push({
+      fx, fy: -pileH(fx, W) * 0.84 - 4,                       // relative to the ground line
+      vx: ((fx - atX) / spread) * 170 * power + (Math.random() - 0.35) * 130 * power,
+      vy: -(140 + Math.random() * 300) * power,
+      roll: Math.random() * 6.3, turn: (Math.random() - 0.5) * 7, size: (20 + Math.random() * 24) * (W < 600 ? 0.8 : 1),
+      sprite: pileSprites[Math.floor(Math.random() * pileSprites.length)], depth: Math.random(), ph: Math.random() * 6.3,
+    });
+  }
+}
+function wobblePile(t, W) {
+  const e = t - pileHitAt;
+  if (e > 2.1) return;
+  const sc = 1 - 0.08 * Math.exp(-4 * e) * Math.cos(13 * e);
+  pileCanvas.style.transformOrigin = `${pileShape(W).cx}px ${foot.clientHeight - GROUND_PAD}px`;
+  pileCanvas.style.transform = e < 2 ? `scaleY(${sc.toFixed(4)})` : '';
+}
+function flyBurst(t, dt, fr, groundY) {
+  const W = fr.width;
+  for (let i = burstLeaves.length - 1; i >= 0; i--) {
+    const B = burstLeaves[i];
+    B.vy += 520 * dt;
+    B.vx -= B.vx * 1.5 * dt;
+    if (B.vy > 0) { B.vy -= B.vy * 2.2 * dt; B.vx += Math.sin(t * 3 + B.ph) * 60 * dt; }   // flutters on the way down
+    B.fx += B.vx * dt; B.fy += B.vy * dt;
+    B.turn -= B.turn * 1.2 * dt;
+    B.roll += B.turn * dt;
+    const h = pileH(B.fx, W);
+    const restY = -(h > 6 ? h * (0.3 + 0.68 * B.depth) : B.depth * 12);
+    if (B.vy > 0 && B.fy >= restY) {
+      settled.push({ sprite: B.sprite, fx: B.fx, fy: restY - GROUND_PAD, size: B.size, roll: B.roll, rollTo: 0, squash: h > 6 ? 0.45 + Math.random() * 0.45 : 0.24 + Math.random() * 0.26, at: t, goneAt: 0 });
+      burstLeaves.splice(i, 1);
+      continue;
+    }
+    layLeaf(lctx, B.sprite, fr.left + B.fx, groundY + B.fy, B.size, B.roll, 0.85, 0, 1);
+  }
+}
+
+// ---- the trampoline ---------------------------------------------------------------------
+const mouse = { x: 0, y: 0, seen: false };
+addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.seen = true; });
+const tramp = { shots: [], hitAt: -10, used: false, stuck: null };
+const TRAMP_TILT = 0.16, TRAMP_G = 1800, SHOT_DT = 1 / 120;
+function trampSpot(W) {
+  const p = pileShape(W), k = Math.max(0.62, Math.min(1, W / 1400));
+  return { x: Math.max(64, p.cx - Math.max(p.s * 4.3, 340 * k)), h: 36 * k, w: 104 * k, k };
+}
+function plotShot(fx, gy, W) {
+  const T = trampSpot(W), ty = -T.h, fall = ty - gy;
+  if (fall < 30) return null;
+  const t1 = Math.sqrt((2 * fall) / TRAMP_G), vx0 = (T.x - fx) / t1;
+  const pts = [];
+  for (let q = 0; q < t1; q += SHOT_DT) pts.push({ x: fx + vx0 * q, y: gy + 0.5 * TRAMP_G * q * q });
+  const bounceI = pts.length;
+  pts.push({ x: T.x, y: ty });                               // the touch itself, so the drawn line turns on the mat
+  const nx = Math.sin(TRAMP_TILT), ny = -Math.cos(TRAMP_TILT);
+  const d = vx0 * nx + TRAMP_G * t1 * ny;
+  let vx = (vx0 - 2 * d * nx) * 0.82, vy = (TRAMP_G * t1 - 2 * d * ny) * 0.82, x = T.x, y = ty, land = { off: true };
+  for (let i = 0; i < 720; i++) {
+    vy += TRAMP_G * SHOT_DT; x += vx * SHOT_DT; y += vy * SHOT_DT;
+    pts.push({ x, y });
+    const h = pileH(x, W) * 0.84;
+    if (vy > 0 && y >= -h + (h > 6 ? 8 : 0)) { land = { x, y, pile: h > 6, speed: Math.hypot(vx, vy), angle: Math.atan2(vy, vx) }; break; }
+    if (x < -80 || x > W + 80) break;
+  }
+  return { pts, bounceI, land };
+}
+const ARROW_TIP = Math.atan2(-0.93, -0.37);
+function drawArrow(c, x, y, rot, scale, alpha) {
+  c.save();
+  c.translate(x, y); c.rotate(rot - ARROW_TIP); c.scale(scale, scale); c.translate(-5, -10);   // turns about its middle
+  c.globalAlpha = alpha;
+  c.beginPath();
+  c.moveTo(0, 0); c.lineTo(0, 17); c.lineTo(4, 13.2); c.lineTo(6.8, 19.6); c.lineTo(9.4, 18.5); c.lineTo(6.7, 12.2); c.lineTo(12, 12.2); c.closePath();
+  c.lineJoin = 'round'; c.lineWidth = 2.2; c.strokeStyle = '#fff'; c.stroke();
+  c.fillStyle = '#111'; c.fill();
+  c.restore();
+}
+function flyTramp(t, dt, fr, groundY) {
+  const W = fr.width;
+  if (!landed || !W || groundY > innerHeight + 40 || groundY < 0) return;
+  const T = trampSpot(W), p = pileShape(W);
+  const tx = fr.left + T.x, ty = groundY - T.h;
+  // The trampoline, seen from a little above: a round black mat hung on springs
+  // inside a padded blue rim, on bent steel legs, with its shadow on the ground.
+  // The mat dips and rings when it is hit.
+  const e = t - tramp.hitAt, dip = e < 1.6 ? 9 * T.k * Math.exp(-4.5 * e) * Math.cos(24 * e) : 0;
+  const cs = Math.cos(TRAMP_TILT), sn = Math.sin(TRAMP_TILT), rx = T.w / 2, ry = T.w * 0.15, u = T.k;
+  const at = (ex, ey) => [tx + ex * cs - ey * sn, ty + ex * sn + ey * cs];   // a point on the tilted frame, on screen
+  lctx.save();
+  lctx.lineCap = 'round'; lctx.lineJoin = 'round';
+  const shade = lctx.createRadialGradient(tx, groundY + 2, 0, tx, groundY + 2, rx * 1.25);
+  shade.addColorStop(0, 'rgba(50, 28, 6, 0.26)'); shade.addColorStop(1, 'rgba(50, 28, 6, 0)');
+  lctx.save(); lctx.translate(tx, groundY + 2); lctx.scale(1, 0.13); lctx.translate(-tx, -groundY - 2);
+  lctx.fillStyle = shade; lctx.beginPath(); lctx.arc(tx, groundY + 2, rx * 1.25, 0, Math.PI * 2); lctx.fill();
+  lctx.restore();
+  // legs: the far pair darker and set in, the near pair lighter, each with a foot
+  for (const [ex, ey, col, wd] of [[-rx * 0.62, -ry * 0.7, '#565b63', 2.6], [rx * 0.62, -ry * 0.7, '#565b63', 2.6], [-rx * 0.8, ry * 0.55, '#8d939b', 3.2], [rx * 0.8, ry * 0.55, '#8d939b', 3.2]]) {
+    const [X, Y] = at(ex, ey), gy = groundY - (ey < 0 ? 3 * u : 0), splay = Math.sign(ex) * 5 * u;
+    lctx.strokeStyle = col; lctx.lineWidth = wd * u;
+    lctx.beginPath(); lctx.moveTo(X, Y); lctx.quadraticCurveTo(X + splay * 0.2, (Y + gy) / 2, X + splay, gy); lctx.stroke();
+    lctx.beginPath(); lctx.moveTo(X + splay - 5 * u, gy); lctx.lineTo(X + splay + 5 * u, gy); lctx.stroke();
+  }
+  lctx.translate(tx, ty); lctx.rotate(TRAMP_TILT);
+  // the padded rim has some thickness: its side first, then its top
+  lctx.fillStyle = '#1f4379'; lctx.beginPath(); lctx.ellipse(0, 4.5 * u, rx, ry, 0, 0, Math.PI * 2); lctx.fill();
+  const pad = lctx.createLinearGradient(0, -ry, 0, ry);
+  pad.addColorStop(0, '#2c5c9f'); pad.addColorStop(1, '#3f74bb');
+  lctx.fillStyle = pad; lctx.beginPath(); lctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; lctx.lineWidth = 1.2 * u;
+  lctx.beginPath(); lctx.ellipse(0, 0, rx * 0.93, ry * 0.9, 0, Math.PI * 1.05, Math.PI * 1.75); lctx.stroke();
+  // the gap where the springs are
+  lctx.fillStyle = '#c9c4b8'; lctx.beginPath(); lctx.ellipse(0, 0.5 * u, rx * 0.8, ry * 0.76, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = '#6d7077'; lctx.lineWidth = 1.1 * u;
+  lctx.beginPath();
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+    lctx.moveTo(ca * rx * 0.8, 0.5 * u + sa * ry * 0.76); lctx.lineTo(ca * rx * 0.68, 0.5 * u + dip * 0.35 + sa * ry * 0.63);
+  }
+  lctx.stroke();
+  // the mat, sagging in the middle when something lands on it
+  const mat = lctx.createRadialGradient(0, dip, 0, 0, dip * 0.5, rx * 0.7);
+  mat.addColorStop(0, dip > 0.5 ? '#0e0e10' : '#1c1b1d'); mat.addColorStop(1, '#2b2a2d');
+  lctx.fillStyle = mat; lctx.beginPath(); lctx.ellipse(0, 0.5 * u + dip * 0.45, rx * 0.7, ry * 0.65 + Math.abs(dip) * 0.25, 0, 0, Math.PI * 2); lctx.fill();
+  lctx.strokeStyle = 'rgba(255, 255, 255, 0.12)'; lctx.lineWidth = 1 * u;
+  lctx.beginPath(); lctx.ellipse(0, 0.5 * u + dip * 0.45, rx * 0.5, ry * 0.42, 0, Math.PI * 1.1, Math.PI * 1.6); lctx.stroke();
+  lctx.restore();
+  lctx.save();
+  if (!tramp.used) {
+    lctx.fillStyle = 'rgba(2, 56, 122, 0.75)'; lctx.textAlign = 'center';
+    lctx.font = "italic 400 15px 'Instrument Serif', Georgia, serif";
+    lctx.fillText('click anywhere above to drop your cursor', Math.max(140, tx), groundY + 22);
+  }
+  lctx.restore();
+  // the flight as it would go from where the cursor is now
+  const aiming = mouse.seen && tramp.shots.length === 0 && mouse.y < ty - 30 && mouse.y > 0;
+  if (aiming) {
+    const plot = plotShot(mouse.x - fr.left, mouse.y - groundY, W);
+    if (plot) {
+      lctx.save();
+      lctx.setLineDash([11, 11]); lctx.lineWidth = 4; lctx.lineCap = 'round'; lctx.lineJoin = 'round';
+      lctx.strokeStyle = 'rgba(2, 56, 122, 0.3)';
+      lctx.beginPath();
+      plot.pts.forEach((q, i) => { if (i % 3 && i !== plot.pts.length - 1 && i !== plot.bounceI) return; const X = fr.left + q.x, Y = groundY + q.y; if (i) lctx.lineTo(X, Y); else lctx.moveTo(X, Y); });
+      lctx.stroke();
+      if (!plot.land.off) { lctx.setLineDash([]); lctx.lineWidth = 2; lctx.beginPath(); lctx.arc(fr.left + plot.land.x, groundY + plot.land.y, 7, 0, Math.PI * 2); lctx.stroke(); }
+      lctx.restore();
+    }
+  }
+  // the last one to land: poking back out of the pile, or stuck in the ground for a while
+  const S = tramp.stuck;
+  if (S) {
+    const age = t - S.at;
+    if (S.pile) {
+      const up = smoother((age - 0.7) / 0.5), top = groundY - pileH(S.x, W) * 0.84;
+      if (up > 0) {
+        lctx.save();
+        lctx.beginPath(); lctx.rect(fr.left + S.x - 40, top - 60, 80, 60 + 4); lctx.clip();
+        drawArrow(lctx, fr.left + S.x, top + 16 - 22 * up, -Math.PI / 2 + Math.sin(t * 2.2) * 0.1 * up, 1.2 * T.k, 1);
+        lctx.restore();
+        layLeaf(lctx, pileSprites[7], fr.left + S.x - 7, top + 5, 24 * T.k, 1.3, 0.6, 0.05, up);
+        layLeaf(lctx, pileSprites[12], fr.left + S.x + 8, top + 6, 24 * T.k, 4.1, 0.6, 0.05, up);
+      }
+    } else {
+      const out = 1 - ramp01((age - 3.5) / 1);
+      if (out <= 0) tramp.stuck = null;
+      else {
+        lctx.save();
+        lctx.beginPath(); lctx.rect(fr.left + S.x - 40, groundY - 60, 80, 60 + 2); lctx.clip();
+        drawArrow(lctx, fr.left + S.x, groundY - 5 * T.k, S.angle, 1.2 * T.k, out);
+        lctx.restore();
+      }
+    }
+  }
+  // cursors in the air
+  for (let i = tramp.shots.length - 1; i >= 0; i--) {
+    const shot = tramp.shots[i], n = shot.plot.pts.length;
+    const at = Math.floor((t - shot.at) / SHOT_DT);
+    if (!shot.bounced && at >= shot.plot.bounceI) { shot.bounced = true; tramp.hitAt = t; }
+    if (at >= n - 1) {
+      const L = shot.plot.land;
+      tramp.shots.splice(i, 1);
+      if (!L.off) {
+        tramp.stuck = { x: L.x, pile: L.pile, angle: L.angle, at: t };
+        if (L.pile) { pileHitAt = t; tossLeaves(W, Math.round((W < 600 ? 9 : 14) * Math.min(1.6, L.speed / 900)), Math.min(1.1, L.speed / 1000), L.x, p.s * 0.55); }
+      }
+      continue;
+    }
+    const a = shot.plot.pts[at], b = shot.plot.pts[Math.min(n - 1, at + 2)];
+    drawArrow(lctx, fr.left + a.x, groundY + a.y, Math.atan2(b.y - a.y, b.x - a.x), 1.2 * T.k, 1);
+  }
+  document.documentElement.style.cursor = tramp.shots.length ? 'none' : '';   // it has left the hand
+}
+addEventListener('pointerdown', (e) => {
+  if (tramp.shots.length || (e.target.closest && e.target.closest('a, button'))) return;
+  const fr = foot.getBoundingClientRect(), groundY = fr.bottom - GROUND_PAD;
+  const plot = plotShot(e.clientX - fr.left, e.clientY - groundY, fr.width);
+  if (!plot) return;
+  tramp.used = true;
+  tramp.shots.push({ plot, at: lastT, bounced: false });
+});
+
+// ---- film grain -------------------------------------------------------------------------
+const grainC = document.getElementById('grain'), gctx = grainC.getContext('2d');
+const TILE = 192;
+const tiles = Array.from({ length: 6 }, () => {
+  const c = document.createElement('canvas'); c.width = c.height = TILE;
+  const cx = c.getContext('2d'), img = cx.createImageData(TILE, TILE), d = img.data;
+  for (let i = 0; i < d.length; i += 4) { d[i] = d[i + 1] = d[i + 2] = 128 + (Math.random() - 0.5) * 135; d[i + 3] = 255; }
+  cx.putImageData(img, 0, 0);
+  return gctx.createPattern(c, 'repeat');
+});
+function sizeGrain() { const dpr = Math.min(devicePixelRatio || 1, 2); grainC.width = Math.ceil((innerWidth * dpr) / 1.5); grainC.height = Math.ceil((innerHeight * dpr) / 1.5); }
+function drawGrain() {
+  if (!grainC.width || !grainC.height) return;
+  gctx.setTransform(1, 0, 0, 1, Math.random() * TILE, Math.random() * TILE);
+  gctx.fillStyle = tiles[Math.floor(Math.random() * tiles.length)];
+  gctx.fillRect(-TILE, -TILE, grainC.width + TILE * 2, grainC.height + TILE * 2);
+}
+addEventListener('resize', () => { sizeGrain(); drawGrain(); });
+sizeGrain(); drawGrain();
+
+// ---- every frame --------------------------------------------------------------------------
+const t0 = performance.now();
+let lastGrain = 0;
+function frame(now) {
+  const t = (now - t0) / 1000, dt = Math.min(0.05, t - lastT); lastT = t;
+  if (t - lastGrain > 1 / 29) { lastGrain = t; drawGrain(); }
+  if (t > nextLeafAt && looseLeaves.length < P.leafCount) { spawnLeaf(t, false, true); nextLeafAt = t + 1.2 + Math.random() * 2.6; }
+  lctx.clearRect(0, 0, innerWidth, innerHeight);
+  const fr = foot.getBoundingClientRect();
+  const groundY = fr.bottom - GROUND_PAD;
+  // landed leaves first, so the ones still falling pass in front of them
+  while (settled.length > SETTLED_MAX && !settled[0].goneAt) settled[0].goneAt = t;
+  for (let i = settled.length - 1; i >= 0; i--) {
+    const S = settled[i];
+    const out = S.goneAt ? 1 - (t - S.goneAt) / 3 : 1;
+    if (out <= 0) { settled.splice(i, 1); continue; }
+    const y = fr.bottom + S.fy;
+    if (y < -80 || y > innerHeight + 80) continue;
+    const k = smoother((t - S.at) / 0.9);                  // easing down flat, and down to the size of the pile's own leaves
+    layLeaf(lctx, S.sprite, fr.left + S.fx, y, S.size + (Math.min(S.size, 40) - S.size) * k, S.roll + S.rollTo * k, 1 + (S.squash - 1) * k, 0.12 * k, out);
+  }
+  flyTramp(t, dt, fr, groundY);
+  wobblePile(t, fr.width);
+  flyBurst(t, dt, fr, groundY);
+  for (let i = looseLeaves.length - 1; i >= 0; i--) {
+    const L = looseLeaves[i];
+    const gone = Math.hypot(L.x - L.from.x, L.y - L.from.y);
+    if (L.fallAt === null && gone > L.total * L.giveOut) L.fallAt = t;
+    // while pushed, the path curls a little to one side of the straight line
+    const arc = L.fallAt === null ? Math.sin(Math.min(1, gone / (L.total * L.giveOut)) * Math.PI) * L.curl : 0;
+    let wantX = L.push.x - (L.push.y / (Math.hypot(L.push.x, L.push.y) || 1)) * arc;
+    let wantY = L.push.y + (L.push.x / (Math.hypot(L.push.x, L.push.y) || 1)) * arc;
+    let ease = 0.08;
+    if (L.fallAt !== null) {
+      const f = t - L.fallAt;
+      // side to side, with a slower second wander so no two zigzags match
+      wantX = (Math.sin(f * L.swayHz + L.spin) + Math.sin(f * L.swayHz * L.sway2Hz + L.spin * 2) * L.sway2) * L.swayAmp * P.leafSway;
+      wantY = Math.min(L.sink, 8 + f * 5) * P.leafFall;    // and slowly down
+      ease = L.settle;
+    }
+    L.vx += (wantX - L.vx) * ease;
+    L.vy += (wantY - L.vy) * ease;
+    L.x += L.vx * dt;
+    L.y += L.vy * dt;
+    // each leaf has its own facing and turns only slowly; once it is sinking it
+    // leans into every swing and rocks, as before. No spinning about itself.
+    const age = t - L.born;
+    const sinking = L.fallAt === null ? 0 : Math.min(1, (t - L.fallAt) / 1.5);
+    const lean = (Math.atan2(L.vx, 140) * 0.9 + Math.sin(t * L.rockHz + L.spin) * L.rock) * sinking;
+    const roll = L.tilt + L.drift * age + lean;
+    const size = L.size * P.leafSize;
+    // touching down: on the face of the pile if it is over it, else on the ground
+    if (L.fallAt !== null && L.vy > 0) {
+      const h = pileH(L.x - fr.left, fr.width);
+      const restY = groundY - (h > 6 ? h * (0.3 + 0.68 * L.depth) : L.depth * 12);
+      if (L.y >= restY) {
+        settled.push({ sprite: L.sprite, fx: L.x - fr.left, fy: restY - fr.bottom, size, roll, rollTo: (Math.random() - 0.5) * 0.5,
+          squash: h > 6 ? 0.45 + Math.random() * 0.45 : 0.24 + Math.random() * 0.26, at: t, goneAt: 0 });
+        looseLeaves.splice(i, 1);
+        continue;
+      }
+    }
+    if (L.y > innerHeight + 70 || L.x < -120 || L.x > innerWidth + 120) { looseLeaves.splice(i, 1); continue; }
+    // The blade is cupped along its spine. Each half is drawn on its own: as the
+    // leaf rolls slowly about the spine one half turns toward us and widens while
+    // the other turns away, narrows and falls into shade.
+    const theta = Math.sin(t * L.turnHz + L.spin) * L.turn;
+    const kl = Math.cos(theta + L.fold), kr = Math.cos(theta - L.fold);
+    lctx.save();
+    lctx.translate(L.x, L.y);
+    lctx.rotate(roll);
+    const fade = Math.min(1, (t - L.born) * 2), half = size / 2;
+    const halves = [[0, -half * kl, half * kl + 0.6, kl], [64, 0, half * kr, kr]]; // [source x, dest x, dest width, facing]
+    for (const [sx, dx, dw, k] of halves) {
+      lctx.globalAlpha = fade;
+      lctx.drawImage(L.sprite.base, sx, 0, 64, 128, dx, -half, dw, size);
+      lctx.globalAlpha = fade * Math.min(0.5, (1 - k) * 4);
+      lctx.drawImage(L.sprite.dark, sx, 0, 64, 128, dx, -half, dw, size);
+    }
+    lctx.restore();
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
