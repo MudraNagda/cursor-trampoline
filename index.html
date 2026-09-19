@@ -12,13 +12,13 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #fbfaf4; color: #02387A; font-family: 'Inter', system-ui, sans-serif; -webkit-user-select: none; user-select: none; touch-action: none; }
-  /* the ground sits a little below the middle of the window, with the trampoline
-     and the pile centred on it as a pair */
-  .foot { position: fixed; left: 0; right: 0; top: 0; height: 70vh; }
+  /* one composition: the trampoline and the pile centred as a pair on a ground line
+     low in the window, the hint centred under them, the credit centred at the bottom */
+  .foot { position: fixed; left: 0; right: 0; top: 0; height: 80vh; }
   .foot canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .leaf, .grain { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .grain { opacity: 0.26; mix-blend-mode: hard-light; image-rendering: pixelated; }
-  .by { position: fixed; right: max(20px, 4vw); top: max(24px, 6vh); margin: 0; font: 600 12px/1 'Inter', system-ui, sans-serif; opacity: 0.75; }
+  .by { position: fixed; left: 0; right: 0; bottom: max(18px, 3.5vh); margin: 0; text-align: center; font: 600 12px/1 'Inter', system-ui, sans-serif; opacity: 0.7; }
   .by a { color: inherit; }
 </style>
 </head>
@@ -169,11 +169,13 @@ function layLeaf(c, sprite, x, y, size, roll, squash, shade, alpha) {
   if (shade > 0.01) { c.globalAlpha = shade * alpha; c.drawImage(sprite.dark, -size / 2, -size / 2, size, size); }
   c.restore();
 }
+const sceneScale = (W) => Math.max(0.62, Math.min(1.4, W / 1400));   // the whole scene grows with the window
 function pileShape(W) {
-  const s = Math.max(70, Math.min(95, W * 0.07)), k = Math.max(0.62, Math.min(1, W / 1400));
+  const k = sceneScale(W), s = Math.max(70, 100 * k);
   // the trampoline stands this far to the pile's left; the two are centred together
-  const apart = Math.max(s * 4.3, 340 * k);
-  return { cx: Math.min(W / 2 + apart / 2, W - s * 1.7), s, H: s * 0.72 };
+  const apart = Math.max(s * 3.6, 340 * k);
+  const cx = Math.min(W / 2 + apart / 2, W - s * 1.7);
+  return { cx, s, H: s * 0.72, apart, mid: Math.max(cx - apart / 2, (cx + 64) / 2) };
 }
 function pileH(x, W) {
   const p = pileShape(W), u = (x - p.cx) / p.s;
@@ -194,7 +196,11 @@ function paintPile() {
   // its own small seeded generator, so the pile is the same pile after a resize
   let seed = 90210;
   const r = () => { seed = (seed + 0x6D2B79F5) | 0; let k = Math.imul(seed ^ (seed >>> 15), 1 | seed); k = (k + Math.imul(k ^ (k >>> 7), 61 | k)) ^ k; return ((k ^ (k >>> 14)) >>> 0) / 4294967296; };
-  const scale = W < 600 ? 0.8 : 1;
+  const scale = Math.max(0.8, Math.min(1.35, p.s / 95));
+  // the ground: a faint line that fades out to both sides, so nothing floats
+  const line = c.createLinearGradient(p.mid - W * 0.42, 0, p.mid + W * 0.42, 0);
+  line.addColorStop(0, 'rgba(2, 56, 122, 0)'); line.addColorStop(0.3, 'rgba(2, 56, 122, 0.16)'); line.addColorStop(0.7, 'rgba(2, 56, 122, 0.16)'); line.addColorStop(1, 'rgba(2, 56, 122, 0)');
+  c.fillStyle = line; c.fillRect(p.mid - W * 0.42, ground + 1, W * 0.84, 1);
   // soft shadow on the ground under the mound
   c.save();
   c.translate(p.cx, ground + 2); c.scale(1, 0.1);
@@ -210,8 +216,8 @@ function paintPile() {
   c.fillStyle = 'rgb(168, 112, 28)'; c.fill();
   // loose ones on the ground: thick near the pile, thinning out to the edges
   for (let i = 0; i < 70; i++) {
-    const near = i < 52;
-    const x = near ? p.cx + (r() + r() + r() - 1.5) * p.s * 3.2 : r() * W;
+    const near = i < 34;
+    const x = near ? p.cx + (r() + r() + r() - 1.5) * p.s * 3 : p.mid + (r() + r() - 1) * (p.apart * 0.5 + p.s * 3.2);
     layLeaf(c, pileSprites[Math.floor(r() * pileSprites.length)], x, ground - r() * 12, (24 + r() * 30) * scale, r() * 6.3, 0.22 + r() * 0.3, 0.1 + r() * 0.2, 1);
   }
   // the mound itself, back to front: the first ones down sit deepest in shade
@@ -277,8 +283,8 @@ addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.client
 const tramp = { shots: [], hitAt: -10, used: false, stuck: null };
 const TRAMP_TILT = 0.16, TRAMP_G = 1800, SHOT_DT = 1 / 120;
 function trampSpot(W) {
-  const p = pileShape(W), k = Math.max(0.62, Math.min(1, W / 1400));
-  return { x: Math.max(64, p.cx - Math.max(p.s * 4.3, 340 * k)), h: 36 * k, w: 104 * k, k };
+  const p = pileShape(W), k = sceneScale(W);
+  return { x: Math.max(64, p.cx - p.apart), h: 36 * k, w: 104 * k, k };
 }
 function plotShot(fx, gy, W) {
   const T = trampSpot(W), ty = -T.h, fall = ty - gy;
@@ -363,8 +369,8 @@ function flyTramp(t, dt, fr, groundY) {
   lctx.save();
   if (!tramp.used) {
     lctx.fillStyle = 'rgba(2, 56, 122, 0.75)'; lctx.textAlign = 'center';
-    lctx.font = "italic 400 15px 'Instrument Serif', Georgia, serif";
-    lctx.fillText('click anywhere above to drop your cursor', Math.max(140, tx), groundY + 22);
+    lctx.font = "italic 400 17px 'Instrument Serif', Georgia, serif";
+    lctx.fillText('click anywhere above to drop your cursor', fr.left + p.mid, groundY + 44);
   }
   lctx.restore();
   // the flight as it would go from where the cursor is now
